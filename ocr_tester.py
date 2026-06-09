@@ -17,6 +17,20 @@ Usage examples:
     python ocr_tester.py --folder input_files --engines all --gpu
     python ocr_tester.py --folder input_files --engines paddle doctr --output-dir my_results
 
+    # ONNX only (CPU)
+    python ocr_tester.py --folder input_files --engines rapidocr
+
+    # Paddle only (CPU or GPU)
+    python ocr_tester.py --folder input_files --engines rapidocr_paddle
+    python ocr_tester.py --folder input_files --engines rapidocr_paddle --gpu
+
+    # Both side by side for comparison
+    python ocr_tester.py --folder input_files --engines rapidocr rapidocr_paddle
+    python ocr_tester.py --folder input_files --engines rapidocr rapidocr_paddle --gpu
+
+    # Full suite including both
+    python ocr_tester.py --folder input_files --engines all --gpu
+
 ==============================================================================
 GPU REQUIREMENTS — READ THIS BEFORE USING --gpu
 ==============================================================================
@@ -92,6 +106,55 @@ This script uses THREE complementary metrics instead:
 
 ==============================================================================
 """
+
+# ---------------------------------------------------------------------------
+# DLL PATH fix — must run before any CUDA library is imported
+# ---------------------------------------------------------------------------
+import os
+import sys
+from pathlib import Path
+
+def _fix_cuda_dll_paths() -> None:
+    """
+    On Windows, PaddlePaddle and PyTorch look for CUDA DLLs in system PATH.
+    When CUDA libraries are installed as pip packages (nvidia-cudnn-cu12 etc.)
+    their DLLs live inside the venv and are NOT on PATH by default.
+    This function adds them automatically.
+    """
+    # Find the site-packages/nvidia folder relative to this venv
+    nvidia_base = None
+    for p in sys.path:
+        candidate = Path(p) / "nvidia"
+        if candidate.exists():
+            nvidia_base = candidate
+            break
+
+    if nvidia_base is None:
+        return  # not a pip-installed CUDA setup, skip
+
+    dll_dirs = [
+        nvidia_base / "cudnn"        / "bin",
+        nvidia_base / "cublas"       / "bin",
+        nvidia_base / "cuda_runtime" / "bin",
+        nvidia_base / "cufft"        / "bin",
+        nvidia_base / "curand"       / "bin",
+        nvidia_base / "cusolver"     / "bin",
+        nvidia_base / "cusparse"     / "bin",
+        nvidia_base / "nvjitlink"    / "bin",
+    ]
+
+    added = []
+    for d in dll_dirs:
+        if d.exists():
+            # os.add_dll_directory is the modern Windows way (Python 3.8+)
+            # It tells the DLL loader to search this folder
+            os.add_dll_directory(str(d))
+            added.append(str(d))
+
+    if added:
+        print("[INFO] Added %d CUDA DLL directories to loader path." % len(added))
+
+_fix_cuda_dll_paths()
 
 import argparse
 import difflib
@@ -408,6 +471,61 @@ def run_rapidocr(images: list, use_gpu: bool = False) -> tuple[str, float]:
 
     return "\n".join(all_lines), time.time() - t0
 
+def run_rapidocr_paddle(images: list, use_gpu: bool = False) -> tuple[str, float]:
+    import sys
+
+    # Clear any cached partial paddle imports
+    for mod in list(sys.modules.keys()):
+        if mod.startswith("paddle"):
+            del sys.modules[mod]
+
+    try:
+        import numpy as np
+    except ImportError:
+        return "[SKIP] numpy not installed.", 0.0
+
+    try:
+        from rapidocr_paddle import RapidOCR
+    except ImportError:
+        return "[SKIP] rapidocr-paddle not installed.  pip install rapidocr-paddle", 0.0
+    except Exception as exc:
+        return "[SKIP] rapidocr-paddle import error: %s" % exc, 0.0
+
+    print("  [RapidOCR-Paddle] Loading model (gpu=%s)..." % use_gpu)
+    try:
+        ocr = RapidOCR(
+            det_use_cuda=use_gpu,
+            cls_use_cuda=use_gpu,
+            rec_use_cuda=use_gpu,
+        )
+    except TypeError:
+        # Older rapidocr-paddle versions don't accept cuda kwargs
+        print("  [RapidOCR-Paddle] Note: GPU kwargs not supported, loading default...")
+        try:
+            ocr = RapidOCR()
+        except Exception as exc:
+            return "[SKIP] RapidOCR-Paddle model load failed: %s" % exc, 0.0
+    except Exception as exc:
+        return "[SKIP] RapidOCR-Paddle model load failed: %s" % exc, 0.0
+
+    all_lines: list[str] = []
+    t0 = time.time()
+    for page_num, img in images:
+        print("  [RapidOCR-Paddle] Processing page %d..." % page_num)
+        img_array = np.array(img.convert("RGB"))
+        try:
+            result, _ = ocr(img_array)
+            if result is None:
+                continue
+            for item in result:
+                if len(item) >= 3:
+                    text, conf = item[1], item[2]
+                    if str(text).strip():
+                        all_lines.append("%s  (conf:%.3f)" % (text, float(conf)))
+        except Exception as exc:
+            print("    [RapidOCR-Paddle] Page %d error: %s" % (page_num, exc))
+
+    return "\n".join(all_lines), time.time() - t0
 
 def run_easyocr(images: list, use_gpu: bool = False) -> tuple[str, float]:
     """
@@ -529,15 +647,16 @@ def run_tesseract(images: list, use_gpu: bool = False) -> tuple[str, float]:
 # ---------------------------------------------------------------------------
 
 ENGINE_REGISTRY: dict[str, tuple[str, callable]] = {
-    "paddle":    ("PaddleOCR",  run_paddle),
-    "doctr":     ("docTR",      run_doctr),
-    "rapidocr":  ("RapidOCR",   run_rapidocr),
-    "easyocr":   ("EasyOCR",    run_easyocr),
-    "tesseract": ("Tesseract",  run_tesseract),
+    "paddle":           ("PaddleOCR",  run_paddle),
+    "doctr":            ("docTR",      run_doctr),
+    "rapidocr":         ("RapidOCR-ONNX",   run_rapidocr),
+    "rapidocr_paddle":  ("RapidOCR-Paddle", run_rapidocr_paddle),
+    "easyocr":          ("EasyOCR",    run_easyocr),
+    "tesseract":        ("Tesseract",  run_tesseract),
 }
 
 # Engines that support GPU acceleration
-GPU_CAPABLE_ENGINES = {"paddle", "doctr", "easyocr"}
+GPU_CAPABLE_ENGINES = {"paddle", "doctr", "easyocr", "rapidocr_paddle"}
 
 
 # ---------------------------------------------------------------------------
