@@ -24,6 +24,8 @@ from pathlib import Path
 # Sub-paths inside the nvidia pip package tree that hold CUDA DLLs
 _CUDA_SUBPATHS = [
     "cudnn/bin",
+    "cudnn_ops/bin",         
+    "cudnn_graph/bin",       
     "cublas/bin",
     "cuda_runtime/bin",
     "cufft/bin",
@@ -31,6 +33,7 @@ _CUDA_SUBPATHS = [
     "cusolver/bin",
     "cusparse/bin",
     "nvjitlink/bin",
+    "nccl/bin", 
 ]
 
 

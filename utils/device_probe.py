@@ -66,7 +66,25 @@ def _probe_torch(lines: list[str], use_gpu: bool) -> None:
 
 
 def _probe_paddle(lines: list[str], use_gpu: bool) -> None:
-    lines.append("PaddlePaddle : probe skipped (avoids DLL corruption on Windows)")
+    try:
+        import paddle
+        paddle_ver = paddle.__version__
+        cuda_ok = paddle.device.is_compiled_with_cuda()
+        lines.append("PaddlePaddle version      : %s" % paddle_ver)
+        lines.append("paddle CUDA compiled      : %s" % cuda_ok)
+        if cuda_ok and use_gpu:
+            try:
+                device_count = paddle.device.cuda.device_count()
+                lines.append("  Paddle CUDA devices : %d" % device_count)
+            except Exception:
+                lines.append("  Paddle CUDA devices : (could not query)")
+        active = "gpu" if (use_gpu and cuda_ok) else "cpu"
+        lines.append("Active paddle device      : %s" % active)
+    except ImportError:
+        lines.append("PaddlePaddle : not installed")
+    except Exception as exc:
+        lines.append("PaddlePaddle : import failed — %s" % str(exc)[:120])
+        lines.append("  (DLL fix may be needed — see README.md)")
 
 
 def _probe_easyocr(lines: list[str]) -> None:
