@@ -1,0 +1,32 @@
+# =============================================================================
+# OCR Tester - requirements.txt
+# Python 3.12 | CPU-only | Windows
+# Engines: PaddleOCR (PP-OCRv5), docTR, RapidOCR
+#
+# IMPORTANT - install in this exact order:
+#
+# Step 1: Install PyTorch from its own index (needed by docTR):
+#   pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu
+#
+# Step 2: Install PaddlePaddle 3.x (needed for PP-OCRv5):
+#   pip install paddlepaddle==3.0.0
+#
+# Step 3: Install everything else:
+#   pip install -r requirements.txt
+# =============================================================================
+
+# --- Core ---
+Pillow==10.4.0
+PyMuPDF==1.24.11
+numpy==1.26.4
+
+# --- PaddleOCR 3.x (PP-OCRv5) ---
+# paddlepaddle>=3.0 must be installed first (see Step 2 above)
+# protobuf pin not needed for paddlepaddle 3.x (uses its own protobuf)
+paddleocr>=3.0.0
+
+# --- docTR ---
+python-doctr==0.9.0
+
+# --- RapidOCR ---
+rapidocr-onnxruntime==1.3.24
