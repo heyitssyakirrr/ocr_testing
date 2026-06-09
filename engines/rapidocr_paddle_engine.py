@@ -42,6 +42,15 @@ def run(images: list, use_gpu: bool = False) -> EngineResult:
     """
     _purge_stale_paddle_modules()
 
+    # Force CPU before any paddle import — same DLL issue as paddle_engine
+    import os
+    use_gpu = False
+    os.environ["CUDA_VISIBLE_DEVICES"]  = "-1"
+    os.environ["FLAGS_use_mkldnn"]      = "0"
+    os.environ["PADDLE_DISABLE_ONEDNN"] = "1"
+    os.environ["PADDLE_USE_GPU"]        = "0"
+    os.environ["FLAGS_use_cuda"]        = "0"
+
     try:
         import numpy as np
     except ImportError:
