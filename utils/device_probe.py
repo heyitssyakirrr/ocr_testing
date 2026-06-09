@@ -66,33 +66,7 @@ def _probe_torch(lines: list[str], use_gpu: bool) -> None:
 
 
 def _probe_paddle(lines: list[str], use_gpu: bool) -> None:
-    """
-    Import paddle only if it loads cleanly.  A DLL error here must NOT
-    corrupt the module cache — we catch it and report it without letting
-    the broken module linger in sys.modules.
-    """
-    import sys
-    try:
-        import paddle
-        paddle_cuda = paddle.is_compiled_with_cuda()
-        lines.append("PaddlePaddle version           : %s" % paddle.__version__)
-        lines.append("paddle.is_compiled_with_cuda() : %s" % paddle_cuda)
-        try:
-            lines.append("paddle.device.get_device()     : %s" % paddle.device.get_device())
-        except Exception as inner:
-            lines.append("paddle.device.get_device()     : ERROR — %s" % inner)
-        if use_gpu and not paddle_cuda:
-            lines.append("  *** WARNING: --gpu requested but PaddlePaddle has no CUDA support.")
-            lines.append("  *** Install paddlepaddle-gpu — see README for instructions.")
-    except ImportError:
-        lines.append("PaddlePaddle : not installed")
-    except Exception as exc:
-        # DLL load failure — purge the broken stub so later imports can retry
-        stale = [k for k in sys.modules if k == "paddle" or k.startswith("paddle.")]
-        for k in stale:
-            del sys.modules[k]
-        lines.append("PaddlePaddle : load error — %s" % exc)
-        lines.append("  *** Apply the DLL copy fix described in README.md (issue #1).")
+    lines.append("PaddlePaddle : probe skipped (avoids DLL corruption on Windows)")
 
 
 def _probe_easyocr(lines: list[str]) -> None:

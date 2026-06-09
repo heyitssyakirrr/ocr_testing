@@ -30,6 +30,10 @@ def run(images: list, use_gpu: bool = False) -> EngineResult:
         EngineResult — (ocr_text, elapsed_seconds).
         Returns a "[SKIP] ..." string if the engine cannot initialise.
     """
+    # GPU disabled for paddle on Windows — CUDA DLL path issue with paddlepaddle-gpu 3.3.0
+    # docTR and EasyOCR still use GPU. Accuracy is identical; only speed differs.
+    use_gpu = False
+    
     try:
         import numpy as np
         from paddleocr import PaddleOCR

@@ -52,8 +52,9 @@ def run(images: list, use_gpu: bool = False) -> EngineResult:
     for page_num, img in images:
         print("  [docTR] Processing page %d..." % page_num)
         img_rgb    = np.array(img.convert("RGB"))
-        # docTR expects float32 CHW tensors in [0, 1]
-        img_tensor = (img_rgb.astype("float32") / 255.0).transpose(2, 0, 1)
+        # docTR expects float32 HWC numpy arrays in [0, 255] uint8
+        # Do NOT transpose or normalize — the model() call handles that internally
+        img_tensor = img_rgb
         try:
             result = model([img_tensor])
             for page in result.pages:
