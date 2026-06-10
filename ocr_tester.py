@@ -55,7 +55,7 @@ from metrics.confidence import confidence_stats
 
 def _force_cpu() -> None:
     import os
-    os.environ["CUDA_VISIBLE_DEVICES"]  = ""
+    os.environ["CUDA_VISIBLE_DEVICES"]  = "-1"
     os.environ["PADDLE_USE_GPU"]        = "0"
     os.environ["FLAGS_use_cuda"]        = "0"
     os.environ["FLAGS_use_mkldnn"]      = "0"
