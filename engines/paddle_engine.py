@@ -11,55 +11,42 @@ when torch is also installed. This engine is intentionally CPU-only.
 Install
 -------
     pip install paddlepaddle paddleocr
-    # Do NOT run: pip install paddlepaddle-gpu
 
-Known issue — oneDNN/PIR crash (Unimplemented: ConvertPirAttribute2RuntimeAttribute)
--------------------------------------------------------------------------------------
-PaddlePaddle 3.x enables MKL-DNN (oneDNN) by default.  On Windows, the
-oneDNN executor has an unimplemented path in the PIR (Program IR) compiler
-for DoubleAttribute nodes, which crashes every inference call with:
+Critical Windows requirement
+-----------------------------
+The following env vars MUST be set BEFORE Python starts (i.e. in run_ocr.bat),
+NOT via os.environ in Python — paddle reads them at C++ runtime init which
+happens at the first `import paddle`, before any Python-level os.environ call
+can take effect:
 
-    (Unimplemented) ConvertPirAttribute2RuntimeAttribute not support
+    SET FLAGS_use_mkldnn=0
+    SET FLAGS_enable_pir_api=0
+    SET FLAGS_use_new_executor=0
+    SET PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=0
+
+Without these, every ocr.predict() call raises:
+    NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
     [pir::ArrayAttribute<pir::DoubleAttribute>]
 
-Fix: set os.environ["FLAGS_use_mkldnn"] = "0" BEFORE paddle is imported.
-This must be done at module level here, because paddle reads the flag at
-import-time. The flag is an OS environment variable, not a paddle.set_flags()
-call — paddle.set_flags() only works after the C++ runtime has already read it.
-
-The performance cost is ~10-30% slower inference on CPU; still acceptable.
-
-API changes from v2 → v3
--------------------------
-PaddleOCR 3.x is a full rewrite. Nothing from the 2.x constructor works here:
-  • Constructor args renamed: det_db_thresh → text_det_thresh, etc.
-  • use_angle_cls / cls_thresh removed → use_textline_orientation instead
-  • use_gpu / enable_mkldnn removed from constructor (env-var only)
-  • Call method: .predict() replaces .ocr()  (.ocr() still exists, deprecated)
-  • Result: dict-like with result["rec_texts"] and result["rec_scores"] lists
+Orientation models
+------------------
+use_doc_orientation_classify and use_textline_orientation are disabled.
+Both load UVDoc/orientation models that hit the same oneDNN crash path on
+Windows CPU even when the above flags are set. Pre-rotate pages with Pillow
+before passing to this engine if your documents may be rotated.
 """
 
 from __future__ import annotations
-import os
 import time
-
-# ---------------------------------------------------------------------------
-# MKL-DNN MUST be disabled before paddle is imported anywhere in the process.
-# Setting this env var here is safe — paddle_engine is only imported when the
-# user selects the paddle engine, so no other engine has loaded paddle yet.
-# ---------------------------------------------------------------------------
+import threading
 
 from engines.base import EngineResult
 
-
-# ---------------------------------------------------------------------------
-# Module-level cache — model loaded once, reused across pages and files
-# ---------------------------------------------------------------------------
 _ocr_instance = None
 
 
 def _get_ocr():
-    """Return a cached PaddleOCR instance (PP-OCRv5, CPU, no MKL-DNN)."""
+    """Return a cached PaddleOCR instance (PP-OCRv5, CPU)."""
     global _ocr_instance
     if _ocr_instance is not None:
         return _ocr_instance
@@ -67,39 +54,56 @@ def _get_ocr():
     from paddleocr import PaddleOCR
 
     _ocr_instance = PaddleOCR(
-        # ── Model selection ──────────────────────────────────────────────────
-        # lang="en" + no explicit ocr_version → v3 auto-selects PP-OCRv5
-        # which resolves to PP-OCRv5_server_det + en_PP-OCRv5_mobile_rec
         lang="en",
 
-        # ── Orientation correction ───────────────────────────────────────────
-        # Corrects upside-down pages and rotated text lines —
-        # both are common in CamScanner bank document scans.
-        use_doc_orientation_classify=True,
-        use_textline_orientation=True,
+        # Orientation models disabled — both trigger the oneDNN PIR crash on
+        # Windows CPU regardless of FLAGS_enable_pir_api. Pre-rotate with
+        # Pillow upstream if needed.
+        use_doc_orientation_classify=False,
+        use_textline_orientation=False,
 
-        # ── Detection tuning ─────────────────────────────────────────────────
-        text_det_thresh=0.3,           # pixel-score threshold (default ~0.3)
-        text_det_box_thresh=0.5,       # box-level filter   (default 0.6, relaxed)
-        text_det_unclip_ratio=1.8,     # expand boxes slightly (default 1.5)
-
-        # ── Recognition tuning ───────────────────────────────────────────────
-        text_recognition_batch_size=6, # crops per recognition batch
-        text_rec_score_thresh=0.0,     # keep all detections; conf shown in output
+        text_det_thresh=0.3,
+        text_det_box_thresh=0.5,
+        text_det_unclip_ratio=1.8,
+        text_recognition_batch_size=6,
+        text_rec_score_thresh=0.0,
     )
     return _ocr_instance
+
+
+def _predict_with_timeout(ocr, img_array, timeout_sec: int = 120):
+    """
+    Run ocr.predict() in a daemon thread with a hard timeout.
+
+    PaddleOCR on Windows can deadlock silently instead of raising an exception.
+    A daemon thread with a join timeout is the safest cross-platform guard —
+    the model object is not picklable so multiprocessing is not an option.
+
+    Raises TimeoutError if the call doesn't return within timeout_sec.
+    """
+    result_holder = [None]
+    exc_holder    = [None]
+
+    def _worker():
+        try:
+            result_holder[0] = ocr.predict(img_array)
+        except Exception as e:
+            exc_holder[0] = e
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=timeout_sec)
+
+    if t.is_alive():
+        raise TimeoutError("ocr.predict() exceeded %ds — likely a Windows oneDNN deadlock" % timeout_sec)
+    if exc_holder[0] is not None:
+        raise exc_holder[0]
+    return result_holder[0]
 
 
 def run(images: list, use_gpu: bool = False) -> EngineResult:
     """
     Run PaddleOCR (PP-OCRv5, CPU) on a list of (page_num, PIL.Image) pairs.
-
-    Args:
-        images:  List of (page_number, PIL.Image) tuples.
-        use_gpu: Accepted for API compatibility; always ignored with a notice.
-
-    Returns:
-        EngineResult — (ocr_text, elapsed_seconds).
     """
     try:
         import numpy as np
@@ -107,26 +111,20 @@ def run(images: list, use_gpu: bool = False) -> EngineResult:
         return "[SKIP] numpy not installed.  pip install numpy", 0.0
 
     try:
-        from paddleocr import PaddleOCR  # noqa: F401 — import check only
+        from paddleocr import PaddleOCR  # noqa: F401
     except ImportError:
-        return (
-            "[SKIP] PaddleOCR not installed.  "
-            "pip install paddlepaddle paddleocr",
-            0.0,
-        )
+        return "[SKIP] PaddleOCR not installed.  pip install paddlepaddle paddleocr", 0.0
 
     if use_gpu:
-        print(
-            "  [PaddleOCR] NOTE: GPU build has DLL conflicts with torch on Windows — "
-            "running on CPU."
-        )
+        print("  [PaddleOCR] NOTE: GPU build conflicts with torch on Windows — running CPU.")
 
-    print("  [PaddleOCR] Loading PP-OCRv5 model (CPU, MKL-DNN disabled)...")
+    print("  [PaddleOCR] Loading PP-OCRv5 model (CPU)...")
     try:
         ocr = _get_ocr()
     except Exception as exc:
         return "[SKIP] PaddleOCR model load failed: %s" % exc, 0.0
 
+    import numpy as np
     all_lines: list[str] = []
     t0 = time.time()
 
@@ -135,11 +133,11 @@ def run(images: list, use_gpu: bool = False) -> EngineResult:
         img_array = np.array(img.convert("RGB"))
 
         try:
-            # predict() returns a list of OCRResult objects (one per input image).
-            # Each OCRResult is dict-like:
-            #   result["rec_texts"]  → list[str]   — one recognised string per box
-            #   result["rec_scores"] → list[float] — confidence per box
-            results = ocr.predict(img_array)
+            results = _predict_with_timeout(ocr, img_array, timeout_sec=120)
+        except TimeoutError as exc:
+            print("    [PaddleOCR] Page %d TIMED OUT: %s" % (page_num, exc))
+            print("    [PaddleOCR] Ensure run_ocr.bat sets FLAGS_enable_pir_api=0 before Python starts.")
+            continue
         except Exception as exc:
             print("    [PaddleOCR] Page %d error: %s" % (page_num, exc))
             continue
@@ -151,16 +149,10 @@ def run(images: list, use_gpu: bool = False) -> EngineResult:
         for page_result in results:
             if page_result is None:
                 continue
-
             rec_texts  = page_result.get("rec_texts",  []) or []
             rec_scores = page_result.get("rec_scores", []) or []
-
-            # Guard against length mismatch (shouldn't occur in practice)
             if len(rec_scores) < len(rec_texts):
-                rec_scores = list(rec_scores) + [0.0] * (
-                    len(rec_texts) - len(rec_scores)
-                )
-
+                rec_scores = list(rec_scores) + [0.0] * (len(rec_texts) - len(rec_scores))
             for text, score in zip(rec_texts, rec_scores):
                 text = str(text).strip()
                 if text:
