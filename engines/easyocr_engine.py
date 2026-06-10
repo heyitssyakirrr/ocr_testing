@@ -1,8 +1,8 @@
 """
 engines/easyocr_engine.py
 =========================
-EasyOCR — CRAFT text detection + CRNN recognition.
-GPU: via PyTorch CUDA (same install as docTR).
+EasyOCR — CPU only.
+Install: pip install easyocr
 """
 
 from __future__ import annotations
@@ -12,32 +12,19 @@ from engines.base import EngineResult
 
 
 def run(images: list, use_gpu: bool = False) -> EngineResult:
-    """
-    Run EasyOCR on a list of (page_num, PIL.Image) pairs.
-    """
     try:
         import numpy as np
         import easyocr
     except ImportError:
         return "[SKIP] EasyOCR not installed.  pip install easyocr", 0.0
 
-    # Determine effective GPU availability
+    print("  [EasyOCR] Loading model (CPU)...")
     try:
-        import torch
-        cuda_ok = torch.cuda.is_available()
-    except ImportError:
-        cuda_ok = False
-
-    effective_gpu = use_gpu and cuda_ok
-    if use_gpu and not cuda_ok:
-        print("  [EasyOCR] WARNING: CUDA not available — falling back to CPU.")
-
-    print("  [EasyOCR] Loading model (gpu=%s)..." % effective_gpu)
-    try:
-        reader = easyocr.Reader(["en"], gpu=effective_gpu, verbose=False)
+        reader = easyocr.Reader(["en"], gpu=False, verbose=False)
     except Exception as exc:
         return "[SKIP] EasyOCR model load failed: %s" % exc, 0.0
 
+    import numpy as np
     all_lines: list[str] = []
     t0 = time.time()
 

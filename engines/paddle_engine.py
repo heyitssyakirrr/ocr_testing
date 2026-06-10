@@ -1,67 +1,78 @@
 """
 engines/paddle_engine.py
 ========================
-PaddleOCR v3 — PP-OCRv5 server detection + English mobile recognition (CPU).
+PaddleOCR v3.x — PP-OCRv5, CPU only.
+Install: pip install paddlepaddle==3.1.1 paddleocr>=3.0.0
 
-GPU note
---------
-PaddleOCR's GPU (paddlepaddle-gpu) build causes CUDA DLL conflicts on Windows
-when torch is also installed. This engine is intentionally CPU-only.
+Windows requirement
+-------------------
+These flags MUST exist in the OS environment BEFORE Python starts.
+Add them once to your PowerShell profile (notepad $PROFILE):
 
-Install
--------
-    pip install paddlepaddle paddleocr
+    $env:FLAGS_use_mkldnn                   = "0"
+    $env:FLAGS_enable_pir_api               = "0"
+    $env:FLAGS_use_new_executor             = "0"
+    $env:PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT = "0"
 
-Critical Windows requirement
------------------------------
-The following env vars MUST be set BEFORE Python starts (i.e. in run_ocr.bat),
-NOT via os.environ in Python — paddle reads them at C++ runtime init which
-happens at the first `import paddle`, before any Python-level os.environ call
-can take effect:
-
-    SET FLAGS_use_mkldnn=0
-    SET FLAGS_enable_pir_api=0
-    SET FLAGS_use_new_executor=0
-    SET PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=0
-
-Without these, every ocr.predict() call raises:
-    NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
-    [pir::ArrayAttribute<pir::DoubleAttribute>]
-
-Orientation models
-------------------
-use_doc_orientation_classify and use_textline_orientation are disabled.
-Both load UVDoc/orientation models that hit the same oneDNN crash path on
-Windows CPU even when the above flags are set. Pre-rotate pages with Pillow
-before passing to this engine if your documents may be rotated.
+On Linux no flags are needed — just run python ocr_tester.py directly.
 """
 
 from __future__ import annotations
-import time
+import os
+import platform
 import threading
+import time
 
 from engines.base import EngineResult
 
 _ocr_instance = None
 
+_REQUIRED_FLAGS = {
+    "FLAGS_use_mkldnn":                   "0",
+    "FLAGS_enable_pir_api":               "0",
+    "FLAGS_use_new_executor":             "0",
+    "PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT": "0",
+}
+
+
+def _check_windows_flags() -> str | None:
+    """
+    Returns an error message if required flags are missing on Windows.
+    Returns None if all good (or if not on Windows).
+    """
+    if platform.system() != "Windows":
+        return None
+
+    missing = [k for k, v in _REQUIRED_FLAGS.items() if os.environ.get(k) != v]
+    if not missing:
+        return None
+
+    lines = [
+        "PaddleOCR v3.x requires these flags set BEFORE Python starts on Windows.",
+        "Add them once to your PowerShell profile (run: notepad $PROFILE):",
+        "",
+    ]
+    for k, v in _REQUIRED_FLAGS.items():
+        lines.append('    $env:%s = "%s"' % (k, v))
+    lines += [
+        "",
+        "Then restart your terminal. After that, just run: python ocr_tester.py",
+        "Missing flags: %s" % ", ".join(missing),
+    ]
+    return "\n".join(lines)
+
 
 def _get_ocr():
-    """Return a cached PaddleOCR instance (PP-OCRv5, CPU)."""
+    """Return a cached PaddleOCR v3.x instance (PP-OCRv5, CPU)."""
     global _ocr_instance
     if _ocr_instance is not None:
         return _ocr_instance
 
     from paddleocr import PaddleOCR
-
     _ocr_instance = PaddleOCR(
         lang="en",
-
-        # Orientation models disabled — both trigger the oneDNN PIR crash on
-        # Windows CPU regardless of FLAGS_enable_pir_api. Pre-rotate with
-        # Pillow upstream if needed.
         use_doc_orientation_classify=False,
         use_textline_orientation=False,
-
         text_det_thresh=0.3,
         text_det_box_thresh=0.5,
         text_det_unclip_ratio=1.8,
@@ -74,12 +85,7 @@ def _get_ocr():
 def _predict_with_timeout(ocr, img_array, timeout_sec: int = 120):
     """
     Run ocr.predict() in a daemon thread with a hard timeout.
-
-    PaddleOCR on Windows can deadlock silently instead of raising an exception.
-    A daemon thread with a join timeout is the safest cross-platform guard —
-    the model object is not picklable so multiprocessing is not an option.
-
-    Raises TimeoutError if the call doesn't return within timeout_sec.
+    Guards against the Windows oneDNN deadlock when flags are missing.
     """
     result_holder = [None]
     exc_holder    = [None]
@@ -95,28 +101,30 @@ def _predict_with_timeout(ocr, img_array, timeout_sec: int = 120):
     t.join(timeout=timeout_sec)
 
     if t.is_alive():
-        raise TimeoutError("ocr.predict() exceeded %ds — likely a Windows oneDNN deadlock" % timeout_sec)
+        raise TimeoutError(
+            "ocr.predict() exceeded %ds — Windows oneDNN deadlock detected.\n"
+            "    Fix: add the 4 FLAGS to your PowerShell profile (see paddle_engine.py)." % timeout_sec
+        )
     if exc_holder[0] is not None:
         raise exc_holder[0]
     return result_holder[0]
 
 
 def run(images: list, use_gpu: bool = False) -> EngineResult:
-    """
-    Run PaddleOCR (PP-OCRv5, CPU) on a list of (page_num, PIL.Image) pairs.
-    """
     try:
         import numpy as np
-    except ImportError:
-        return "[SKIP] numpy not installed.  pip install numpy", 0.0
-
-    try:
         from paddleocr import PaddleOCR  # noqa: F401
     except ImportError:
-        return "[SKIP] PaddleOCR not installed.  pip install paddlepaddle paddleocr", 0.0
+        return "[SKIP] PaddleOCR not installed.  pip install paddlepaddle==3.1.1 paddleocr>=3.0.0", 0.0
 
-    if use_gpu:
-        print("  [PaddleOCR] NOTE: GPU build conflicts with torch on Windows — running CPU.")
+    # Warn early on Windows if flags are missing — but still attempt to run.
+    # If flags are missing the predict() call will deadlock and hit the timeout.
+    flag_error = _check_windows_flags()
+    if flag_error:
+        print("\n  [PaddleOCR] WARNING — missing required Windows flags:")
+        for line in flag_error.split("\n"):
+            print("    %s" % line)
+        print()
 
     print("  [PaddleOCR] Loading PP-OCRv5 model (CPU)...")
     try:
@@ -136,7 +144,6 @@ def run(images: list, use_gpu: bool = False) -> EngineResult:
             results = _predict_with_timeout(ocr, img_array, timeout_sec=120)
         except TimeoutError as exc:
             print("    [PaddleOCR] Page %d TIMED OUT: %s" % (page_num, exc))
-            print("    [PaddleOCR] Ensure run_ocr.bat sets FLAGS_enable_pir_api=0 before Python starts.")
             continue
         except Exception as exc:
             print("    [PaddleOCR] Page %d error: %s" % (page_num, exc))
