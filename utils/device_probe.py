@@ -25,6 +25,7 @@ def get_device_evidence(use_gpu: bool) -> list[str]:
     _probe_surya(lines)
     _probe_easyocr(lines)
     _probe_tesseract(lines)
+    _probe_paddleocr(lines)
 
     return lines
 
@@ -81,3 +82,35 @@ def _probe_tesseract(lines: list[str]) -> None:
         lines.append("Tesseract : pytesseract not installed")
     except Exception:
         lines.append("Tesseract : pytesseract installed but binary not found in PATH")
+
+
+def _probe_paddleocr(lines: list[str]) -> None:
+    """Probe PaddleOCR and the underlying paddlepaddle runtime."""
+    try:
+        import paddleocr
+        ver = getattr(paddleocr, "__version__", "unknown")
+        lines.append("PaddleOCR version : %s (CPU only — PP-OCRv5)" % ver)
+    except ImportError:
+        lines.append(
+            "PaddleOCR : not installed  "
+            "(pip install paddlepaddle paddleocr)"
+        )
+        return
+
+    # Also report the paddlepaddle runtime version and whether it was built
+    # with CUDA (it shouldn't be, given our CPU-only install guidance)
+    try:
+        import paddle
+        paddle_ver   = paddle.__version__
+        paddle_cuda  = getattr(paddle, "is_compiled_with_cuda", lambda: False)()
+        lines.append(
+            "  paddlepaddle version  : %s  (CUDA build: %s)" % (paddle_ver, paddle_cuda)
+        )
+        if paddle_cuda:
+            lines.append(
+                "  *** WARNING: paddlepaddle-gpu detected — "
+                "this may cause DLL conflicts on Windows. "
+                "Uninstall and run: pip install paddlepaddle"
+            )
+    except ImportError:
+        lines.append("  paddlepaddle runtime  : not importable (unusual — reinstall paddlepaddle)")

@@ -38,8 +38,13 @@ FUZZY_MATCH_THRESHOLD = 0.80
 # costs (and DLL load failures) for engines that are not being used.
 #
 # REMOVED engines (DLL / library issues):
-#   paddle          — PaddleOCR PP-OCRv5  (Windows CUDA DLL conflicts)
-#   rapidocr_paddle — RapidOCR-Paddle     (same paddle DLL issue)
+#   rapidocr_paddle — RapidOCR-Paddle     (paddle DLL conflicts)
+#
+# CPU-ONLY engines (GPU not supported or disabled intentionally):
+#   paddle          — PaddleOCR PP-OCRv5  (GPU build has Windows CUDA DLL
+#                     conflicts; CPU build with MKL-DNN is stable everywhere)
+#   rapidocr        — RapidOCR-ONNX       (ONNX runtime, no GPU path)
+#   tesseract       — Tesseract 5.x        (CPU binary, no GPU path)
 # ---------------------------------------------------------------------------
 ENGINE_REGISTRY: dict[str, tuple[str, str]] = {
     "surya":    ("Surya OCR",        "engines.surya_engine"),
@@ -47,9 +52,11 @@ ENGINE_REGISTRY: dict[str, tuple[str, str]] = {
     "rapidocr": ("RapidOCR-ONNX",   "engines.rapidocr_engine"),
     "easyocr":  ("EasyOCR",         "engines.easyocr_engine"),
     "tesseract":("Tesseract 5.x",   "engines.tesseract_engine"),
+    "paddle":   ("PaddleOCR",       "engines.paddle_engine"),    # CPU-only, PP-OCRv5
 }
 
 # Keys whose run() functions can make use of CUDA when use_gpu=True.
+# paddle is intentionally excluded — see note above.
 GPU_CAPABLE_ENGINES: frozenset[str] = frozenset({
     "surya",
     "doctr",
