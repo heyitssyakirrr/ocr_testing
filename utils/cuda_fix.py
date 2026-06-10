@@ -3,16 +3,14 @@ utils/cuda_fix.py
 =================
 Windows CUDA DLL path fix.
 
-On Windows, PaddlePaddle and PyTorch look for CUDA DLLs in the system PATH.
+On Windows, PyTorch and other libraries look for CUDA DLLs in the system PATH.
 When CUDA libraries are installed as pip packages (nvidia-cudnn-cu12, etc.)
 their DLLs live inside the venv and are NOT on PATH by default.
 
 This module adds them via os.add_dll_directory() (Python 3.8+), which works
-for PyTorch and most libraries. However, PaddlePaddle's internal DLL loader
-does NOT honour os.add_dll_directory. The permanent fix for paddle is to copy
-the DLLs directly into the paddle package folder (see README.md).
+for PyTorch and most libraries including EasyOCR, docTR, and Surya.
 
-Import this module at the very top of ocr_tester.py, before any torch/paddle
+Import this module at the very top of ocr_tester.py, before any torch
 imports, to ensure the DLL directories are registered as early as possible.
 """
 
@@ -24,8 +22,8 @@ from pathlib import Path
 # Sub-paths inside the nvidia pip package tree that hold CUDA DLLs
 _CUDA_SUBPATHS = [
     "cudnn/bin",
-    "cudnn_ops/bin",         
-    "cudnn_graph/bin",       
+    "cudnn_ops/bin",
+    "cudnn_graph/bin",
     "cublas/bin",
     "cuda_runtime/bin",
     "cufft/bin",
@@ -33,7 +31,7 @@ _CUDA_SUBPATHS = [
     "cusolver/bin",
     "cusparse/bin",
     "nvjitlink/bin",
-    "nccl/bin", 
+    "nccl/bin",
 ]
 
 

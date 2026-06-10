@@ -2,16 +2,6 @@
 utils/device_probe.py
 =====================
 Collect hard evidence about which compute device is actually available.
-
-BUG FIX addressed here:
-  The original code called this function at startup, which imported `paddle`.
-  If paddle's CUDA DLL was missing (issue #4), paddle would raise an OSError
-  and leave a broken stub in sys.modules. Any later import of paddle (by
-  rapidocr_paddle) would hit the same broken stub and also fail.
-
-  Fix: every engine import is wrapped in a try/except. Paddle is only imported
-  if it can be cleanly loaded. rapidocr_paddle_engine.py also purges stale
-  paddle modules before its own import.
 """
 
 from __future__ import annotations
@@ -32,7 +22,7 @@ def get_device_evidence(use_gpu: bool) -> list[str]:
     lines.append("CUDA_VISIBLE_DEVICES : %s" % os.environ.get("CUDA_VISIBLE_DEVICES", "(not set)"))
 
     _probe_torch(lines, use_gpu)
-    _probe_paddle(lines, use_gpu)
+    _probe_surya(lines)
     _probe_easyocr(lines)
     _probe_tesseract(lines)
 
@@ -65,26 +55,13 @@ def _probe_torch(lines: list[str], use_gpu: bool) -> None:
         lines.append("PyTorch : not installed")
 
 
-def _probe_paddle(lines: list[str], use_gpu: bool) -> None:
+def _probe_surya(lines: list[str]) -> None:
     try:
-        import paddle
-        paddle_ver = paddle.__version__
-        cuda_ok = paddle.device.is_compiled_with_cuda()
-        lines.append("PaddlePaddle version      : %s" % paddle_ver)
-        lines.append("paddle CUDA compiled      : %s" % cuda_ok)
-        if cuda_ok and use_gpu:
-            try:
-                device_count = paddle.device.cuda.device_count()
-                lines.append("  Paddle CUDA devices : %d" % device_count)
-            except Exception:
-                lines.append("  Paddle CUDA devices : (could not query)")
-        active = "gpu" if (use_gpu and cuda_ok) else "cpu"
-        lines.append("Active paddle device      : %s" % active)
+        import surya
+        ver = getattr(surya, "__version__", "unknown")
+        lines.append("Surya OCR version : %s (GPU via torch CUDA)" % ver)
     except ImportError:
-        lines.append("PaddlePaddle : not installed")
-    except Exception as exc:
-        lines.append("PaddlePaddle : import failed — %s" % str(exc)[:120])
-        lines.append("  (DLL fix may be needed — see README.md)")
+        lines.append("Surya OCR : not installed  (pip install surya-ocr)")
 
 
 def _probe_easyocr(lines: list[str]) -> None:
