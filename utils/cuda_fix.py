@@ -42,12 +42,9 @@ def apply() -> None:
 
     Safe to call on non-Windows platforms — it's a no-op.
     """
-    # Disable PaddlePaddle MKL-DNN/oneDNN — must be set before paddle C++ init.
-    # Without this, PaddlePaddle 3.x crashes on Windows with:
-    #   (Unimplemented) ConvertPirAttribute2RuntimeAttribute not support
-    #   [pir::ArrayAttribute<pir::DoubleAttribute>]
+
     import os
-    os.environ["FLAGS_use_mkldnn"] = "0"
+    os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
 
     if os.name != "nt":
         return   # Linux/macOS don't need this
